@@ -4,79 +4,140 @@ Karaoke room
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Canon Event - Producer Console</title>
+    <title>Canon Event - Multi-Guest Console</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { margin: 0; background: #000; color: #00ffcc; font-family: 'Courier New', monospace; overflow: hidden; }
-        #player { width: 100vw; height: 100vh; position: absolute; top:0; z-index: 1; }
-        #ui { position: absolute; top: 20px; left: 20px; z-index: 100; background: rgba(10,10,10,0.95); padding: 25px; border: 2px solid #00ffcc; border-radius: 15px; width: 320px; box-shadow: 0 0 20px #00ffcc; }
-        .control-group { margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px; }
-        button { width: 100%; padding: 10px; margin: 5px 0; border: none; font-weight: bold; cursor: pointer; transition: 0.3s; }
-        .btn-host { background: #00ffcc; color: #000; }
-        .btn-mute { background: #ff4444; color: white; }
-        .btn-unmute { background: #44ff44; color: black; }
-        input[type="text"] { width: 90%; background: #222; border: 1px solid #00ffcc; color: #fff; padding: 10px; border-radius: 5px; }
-        #status { font-size: 12px; margin-top: 10px; color: #888; }
+        :root { --accent: #00ffcc; --bg: rgba(10, 10, 10, 0.95); }
+        body { margin: 0; background: transparent; color: var(--accent); font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+        #player { width: 100vw; height: 100vh; position: absolute; top:0; z-index: 1; pointer-events: none; }
+        
+        #ui { 
+            position: absolute; top: 20px; left: 20px; z-index: 100; 
+            background: var(--bg); padding: 25px; border: 2px solid var(--accent); 
+            border-radius: 12px; width: 340px; transition: opacity 0.3s;
+        }
+        .hidden { opacity: 0; pointer-events: none; }
+
+        .section { margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 10px; }
+        label { display: block; font-size: 10px; text-transform: uppercase; margin-bottom: 5px; opacity: 0.7; }
+        
+        input { width: 90%; background: #222; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; margin-bottom: 10px; }
+        button { padding: 8px; cursor: pointer; border: none; font-weight: bold; border-radius: 4px; transition: 0.2s; }
+        
+        .btn-prime { background: var(--accent); color: #000; width: 100%; }
+        
+        /* Guest List Styling */
+        #guest-list { list-style: none; padding: 0; }
+        .guest-row { 
+            display: flex; justify-content: space-between; align-items: center; 
+            background: #222; margin-bottom: 5px; padding: 10px; border-radius: 6px;
+        }
+        .guest-name { font-weight: bold; font-size: 14px; }
+        .mic-toggle { font-size: 11px; padding: 5px 10px; width: 80px; }
+        .is-singing { box-shadow: 0 0 10px var(--accent); border: 1px solid white; }
+
+        .status-on { background: #2ed573; color: white; }
+        .status-off { background: #ff4757; color: white; }
     </style>
 </head>
 <body>
 
     <div id="ui">
-        <h2 style="margin:0 0 15px 0;">CANON EVENT</h2>
+        <h2 style="margin:0 0 10px 0; letter-spacing: 2px; text-align: center;">CANON EVENT</h2>
         
-        <div class="control-group">
-            <small>ROOM ID:</small> <strong id="my-id">...</strong><br>
-            <input type="text" id="join-id" placeholder="Paste Guest ID to Connect">
-            <button class="btn-host" onclick="joinRoom()">LINK GUEST</button>
+        <div class="section">
+            <label>Producer Setup</label>
+            <input type="text" id="display-name" placeholder="Host Name..." onchange="updateProfile()">
+            <small>Host ID: <span id="my-id">...</span></small>
+            <input type="text" id="target-id" placeholder="Paste Guest ID to Invite" style="margin-top:10px;">
+            <button class="btn-prime" onclick="inviteGuest()">INVITE GUEST</button>
         </div>
 
-        <div id="producer-controls" class="control-group">
-            <small>SONG SELECT (YouTube ID):</small>
-            <input type="text" id="v-id" placeholder="e.g. dQw4w9WgXcQ">
-            <button class="btn-host" onclick="broadcastVideo()">LOAD FOR ALL</button>
+        <div class="section">
+            <label>Song Control</label>
+            <input type="text" id="video-id" placeholder="YouTube Video ID">
+            <button class="btn-prime" onclick="broadcastVideo()">SYNC FOR ALL</button>
         </div>
 
-        <div class="control-group">
-            <small>MIC CONTROL:</small>
-            <button id="mic-toggle-btn" class="btn-unmute" onclick="toggleGuestMic()">UNMUTE GUEST</button>
-            <div id="status">Status: Waiting for Guest...</div>
+        <div class="section" style="border:none;">
+            <label>Singer Management</label>
+            <div id="guest-list">
+                <div style="font-size: 11px; opacity: 0.5; text-align: center;">No guests connected</div>
+            </div>
         </div>
+
+        <button onclick="toggleUI()" style="background: #333; color: #888; width: 100%; font-size: 10px;">HIDE OVERLAY (Key: H)</button>
     </div>
 
     <div id="player"></div>
 
     <script>
-        let player, peer, conn, micStream;
-        let guestMicActive = false;
+        let player, peer;
+        let guests = {}; // Store guest connections {id: {conn, name, isMuted}}
 
-        peer = new Peer(); 
+        peer = new Peer();
         peer.on('open', id => document.getElementById('my-id').innerText = id);
 
-        // Host Connection Logic
-        function joinRoom() {
-            const targetId = document.getElementById('join-id').value;
-            conn = peer.connect(targetId);
-            setupDataListener();
-            updateStatus("CONNECTED TO SINGER", "#44ff44");
-        }
-
-        // Guest Reception Logic
-        peer.on('connection', c => {
-            conn = c;
-            setupDataListener();
-            updateStatus("SINGER JOINED", "#44ff44");
-            initializeMic();
+        // Receive Guest Connection
+        peer.on('connection', conn => {
+            setupConnection(conn);
         });
 
-        function setupDataListener() {
-            conn.on('data', data => {
-                if (data.type === 'load') player.loadVideoById(data.id);
-                if (data.type === 'sync') player.seekTo(data.time);
-                if (data.type === 'mic-toggle') setLocalMic(data.enabled);
+        // Host Initiates Connection
+        function inviteGuest() {
+            const id = document.getElementById('target-id').value;
+            if(!id) return;
+            setupConnection(peer.connect(id));
+        }
+
+        function setupConnection(conn) {
+            conn.on('open', () => {
+                guests[conn.peer] = { conn: conn, name: "New Guest", isMuted: true };
+                updateGuestListUI();
+                
+                conn.on('data', data => {
+                    if (data.type === 'name-update') {
+                        guests[conn.peer].name = data.name;
+                        updateGuestListUI();
+                    }
+                    if (data.type === 'voice-activity') {
+                        updateVoiceIndicator(conn.peer, data.active);
+                    }
+                    // Guests also receive commands here (load/mic-control)
+                    if (data.type === 'load') player.loadVideoById(data.id);
+                    if (data.type === 'mic-control') handleLocalMic(data.enabled);
+                });
             });
         }
 
-        // YouTube API
+        function toggleGuestMic(peerId) {
+            const guest = guests[peerId];
+            guest.isMuted = !guest.isMuted;
+            guest.conn.send({ type: 'mic-control', enabled: !guest.isMuted });
+            updateGuestListUI();
+        }
+
+        function updateGuestListUI() {
+            const list = document.getElementById('guest-list');
+            list.innerHTML = "";
+            
+            Object.keys(guests).forEach(id => {
+                const g = guests[id];
+                const row = document.createElement('div');
+                row.className = 'guest-row';
+                row.id = `row-${id}`;
+                row.innerHTML = `
+                    <span class="guest-name">${g.name}</span>
+                    <button class="mic-toggle ${g.isMuted ? 'status-off' : 'status-on'}" 
+                            onclick="toggleGuestMic('${id}')">
+                        ${g.isMuted ? 'MUTE' : 'SINGING'}
+                    </button>
+                `;
+                list.appendChild(row);
+            });
+        }
+
+        // --- YouTube & Broadcast ---
         var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
         document.head.appendChild(tag);
@@ -84,46 +145,30 @@ Karaoke room
         function onYouTubeIframeAPIReady() {
             player = new YT.Player('player', {
                 height: '1080', width: '1920', videoId: 'dQw4w9WgXcQ',
-                playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1 }
+                playerVars: { 'autoplay': 1, 'controls': 0 }
             });
         }
 
         function broadcastVideo() {
-            const vid = document.getElementById('v-id').value;
+            const vid = document.getElementById('video-id').value;
             player.loadVideoById(vid);
-            if(conn) conn.send({ type: 'load', id: vid });
+            Object.values(guests).forEach(g => g.conn.send({ type: 'load', id: vid }));
         }
 
-        // Remote Mic Toggle (Used by Host)
-        function toggleGuestMic() {
-            guestMicActive = !guestMicActive;
-            const btn = document.getElementById('mic-toggle-btn');
-            btn.innerText = guestMicActive ? "MUTE GUEST" : "UNMUTE GUEST";
-            btn.className = guestMicActive ? "btn-mute" : "btn-unmute";
-            if(conn) conn.send({ type: 'mic-toggle', enabled: guestMicActive });
-        }
-
-        async function initializeMic() {
-            try {
-                const ctx = new AudioContext();
+        // --- Mic & Local Audio (for Guests) ---
+        let micStream;
+        async function handleLocalMic(enabled) {
+            if (!micStream) {
                 micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false } });
+                const ctx = new AudioContext();
                 const src = ctx.createMediaStreamSource(micStream);
                 src.connect(ctx.destination);
-                micStream.getAudioTracks()[0].enabled = false; // Start muted
-            } catch(e) { console.error(e); }
-        }
-
-        function setLocalMic(enabled) {
-            if(micStream) {
-                micStream.getAudioTracks()[0].enabled = enabled;
-                updateStatus(enabled ? "LIVE - SINGING" : "MUTED BY PRODUCER", enabled ? "#44ff44" : "#ff4444");
             }
+            micStream.getAudioTracks()[0].enabled = enabled;
         }
 
-        function updateStatus(t, c) {
-            document.getElementById('status').innerText = t;
-            document.getElementById('status').style.color = c;
-        }
+        function toggleUI() { document.getElementById('ui').classList.toggle('hidden'); }
+        window.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'h') toggleUI(); });
     </script>
 </body>
 </html>
