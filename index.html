@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Canon Event - Producer v5</title>
+    <title>Canon Event - Producer v6</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         :root { --neon: #00ffcc; --bg: rgba(10, 10, 10, 0.95); }
@@ -17,24 +17,25 @@
         }
         .hidden { opacity: 0 !important; pointer-events: none !important; }
 
-        /* Tabs */
+        /* Tabs & Inputs */
         .tabs { display: flex; margin-bottom: 15px; border-bottom: 1px solid #333; }
         .tab { flex: 1; text-align: center; padding: 10px; cursor: pointer; font-size: 12px; opacity: 0.5; }
         .tab.active { opacity: 1; border-bottom: 2px solid var(--neon); font-weight: bold; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
-
-        .group { margin-bottom: 15px; }
+        .group { margin-bottom: 15px; border-bottom: 1px solid #222; padding-bottom: 10px; }
         label { display: block; font-size: 10px; text-transform: uppercase; margin-bottom: 5px; color: #888; }
         input { width: calc(100% - 20px); background: #1a1a1a; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; margin-bottom: 10px; }
-        button { width: 100%; padding: 10px; cursor: pointer; border: none; font-weight: bold; border-radius: 4px; background: var(--neon); color: #000; }
+        button { width: 100%; padding: 10px; cursor: pointer; border: none; font-weight: bold; border-radius: 4px; background: var(--neon); color: #000; margin-bottom: 5px; }
         
-        /* Guest Management */
-        .guest-item { display: flex; justify-content: space-between; align-items: center; background: #222; padding: 10px; margin-top: 5px; border-radius: 5px; border-left: 3px solid var(--neon); }
+        /* Playback Controls */
+        .playback-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 10px; }
+        .seek-container { display: flex; align-items: center; gap: 10px; }
+        #seek-slider { flex: 1; cursor: pointer; accent-color: var(--neon); }
+        
+        .guest-item { display: flex; justify-content: space-between; align-items: center; background: #222; padding: 10px; margin-top: 5px; border-radius: 5px; }
         .mic-btn { width: auto; padding: 5px 10px; background: #ff4757; color: white; font-size: 11px; }
         .mic-btn.on { background: #2ed573; }
-        
-        #hint { position: fixed; bottom: 10px; left: 10px; font-size: 10px; color: #444; }
     </style>
 </head>
 <body>
@@ -43,16 +44,15 @@
         <h2 style="margin:0 0 10px 0; text-align: center; letter-spacing: 2px;">CANON EVENT</h2>
         
         <div class="tabs">
-            <div class="tab active" onclick="showTab('singer-tab')">SINGER SETUP</div>
-            <div class="tab" onclick="showTab('producer-tab')">PRODUCER DASH</div>
+            <div class="tab active" onclick="showTab('singer-tab')">SINGER</div>
+            <div class="tab" onclick="showTab('producer-tab')">PRODUCER</div>
         </div>
 
         <div id="singer-tab" class="tab-content active">
             <div class="group">
-                <label>1. Your Stage Name</label>
+                <label>Nickname</label>
                 <input type="text" id="my-name" placeholder="VTuber Name..." oninput="syncName()">
                 <p style="font-size:11px;">Your ID: <strong id="my-id">...</strong></p>
-                <small style="color:#666; font-size: 9px;">Give this ID to the Producer.</small>
             </div>
         </div>
 
@@ -60,20 +60,30 @@
             <div class="group">
                 <label>1. Link a Singer</label>
                 <input type="text" id="target-id" placeholder="Paste Singer ID here">
-                <button onclick="connectToSinger()">ADD SINGER TO SHOW</button>
+                <button onclick="connectToSinger()">ADD SINGER</button>
             </div>
 
             <div class="group">
-                <label>2. Song Control (YouTube ID)</label>
-                <input type="text" id="video-id" placeholder="e.g. dQw4w9WgXcQ">
-                <button onclick="syncVideo()">LOAD SONG FOR ALL</button>
+                <label>2. Song Setup</label>
+                <input type="text" id="video-id" placeholder="YouTube ID (e.g. dQw4w9WgXcQ)">
+                <button onclick="syncVideo()">LOAD SONG</button>
             </div>
 
             <div class="group">
-                <label>3. Active Singers (Mute/Unmute)</label>
-                <div id="producer-guest-list">
-                    <small style="opacity:0.3;">No singers linked yet.</small>
+                <label>3. Playback Control</label>
+                <div class="playback-grid">
+                    <button onclick="sendControl('play')">PLAY</button>
+                    <button onclick="sendControl('pause')">PAUSE</button>
                 </div>
+                <div class="seek-container">
+                    <span id="current-time" style="font-size:10px;">0:00</span>
+                    <input type="range" id="seek-slider" value="0" min="0" max="100" onchange="sendSeek(this.value)">
+                </div>
+            </div>
+
+            <div class="group" style="border:none;">
+                <label>4. Active Singers</label>
+                <div id="producer-guest-list"><small style="opacity:0.3;">None linked.</small></div>
             </div>
         </div>
 
@@ -81,41 +91,34 @@
     </div>
 
     <div id="player"></div>
-    <div id="hint">Press [H] to Toggle Interface</div>
 
     <script>
         let player, peer;
-        let connections = {}; // {peerId: {conn, name, muted}}
+        let connections = {};
         let micStream;
 
-        // 1. PeerJS
         peer = new Peer();
         peer.on('open', id => document.getElementById('my-id').innerText = id);
-        
-        // Host (Producer) receives connection from Guest (Singer)
         peer.on('connection', conn => handleConnection(conn));
 
         function connectToSinger() {
             const id = document.getElementById('target-id').value.trim();
-            if (!id) return;
-            handleConnection(peer.connect(id));
+            if (id) handleConnection(peer.connect(id));
         }
 
         function handleConnection(conn) {
             conn.on('open', () => {
                 connections[conn.peer] = { conn: conn, name: "Guest", muted: true };
-                
-                // Send name instantly
-                const currentName = document.getElementById('my-name').value || "Unnamed";
-                conn.send({ type: 'name-update', name: currentName });
-
+                conn.send({ type: 'name-update', name: document.getElementById('my-name').value || "Guest" });
                 conn.on('data', data => {
-                    if (data.type === 'name-update') {
-                        connections[conn.peer].name = data.name;
-                        updateProducerList();
-                    }
+                    if (data.type === 'name-update') { connections[conn.peer].name = data.name; updateProducerList(); }
                     if (data.type === 'load-vid') player.loadVideoById(data.id);
                     if (data.type === 'mic-cmd') applyMicHardware(data.enabled);
+                    if (data.type === 'ctrl') {
+                        if(data.action === 'play') player.playVideo();
+                        if(data.action === 'pause') player.pauseVideo();
+                    }
+                    if (data.type === 'seek') player.seekTo(data.time, true);
                 });
                 updateProducerList();
             });
@@ -126,21 +129,42 @@
             Object.values(connections).forEach(c => c.conn.send({ type: 'name-update', name: name }));
         }
 
-        // 2. Producer Dash
+        function syncVideo() {
+            const vid = document.getElementById('video-id').value;
+            player.loadVideoById(vid);
+            Object.values(connections).forEach(c => c.conn.send({ type: 'load-vid', id: vid }));
+        }
+
+        // --- NEW PLAYBACK LOGIC ---
+        function sendControl(action) {
+            if(action === 'play') player.playVideo();
+            if(action === 'pause') player.pauseVideo();
+            Object.values(connections).forEach(c => c.conn.send({ type: 'ctrl', action: action }));
+        }
+
+        function sendSeek(percent) {
+            const duration = player.getDuration();
+            const time = (percent / 100) * duration;
+            player.seekTo(time, true);
+            Object.values(connections).forEach(c => c.conn.send({ type: 'seek', time: time }));
+        }
+
+        // Update Slider as Video Plays
+        setInterval(() => {
+            if (player && player.getCurrentTime) {
+                const cur = player.getCurrentTime();
+                const dur = player.getDuration();
+                document.getElementById('current-time').innerText = Math.floor(cur/60) + ":" + ("0"+Math.floor(cur%60)).slice(-2);
+                if (dur > 0) document.getElementById('seek-slider').value = (cur / dur) * 100;
+            }
+        }, 1000);
+
         function updateProducerList() {
             const list = document.getElementById('producer-guest-list');
             list.innerHTML = "";
             Object.keys(connections).forEach(id => {
                 const g = connections[id];
-                const div = document.createElement('div');
-                div.className = 'guest-item';
-                div.innerHTML = `
-                    <span>${g.name}</span>
-                    <button class="mic-btn ${g.muted ? '' : 'on'}" onclick="toggleRemoteMic('${id}')">
-                        ${g.muted ? 'MUTE' : 'LIVE'}
-                    </button>
-                `;
-                list.appendChild(div);
+                list.innerHTML += `<div class="guest-item"><span>${g.name}</span><button class="mic-btn ${g.muted?'':'on'}" onclick="toggleRemoteMic('${id}')">${g.muted?'MUTE':'LIVE'}</button></div>`;
             });
         }
 
@@ -150,13 +174,6 @@
             updateProducerList();
         }
 
-        function syncVideo() {
-            const vid = document.getElementById('video-id').value;
-            player.loadVideoById(vid);
-            Object.values(connections).forEach(c => c.conn.send({ type: 'load-vid', id: vid }));
-        }
-
-        // 3. Audio (Singer Side)
         async function applyMicHardware(enabled) {
             if (!micStream) {
                 micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false } });
@@ -167,7 +184,6 @@
             micStream.getAudioTracks()[0].enabled = enabled;
         }
 
-        // 4. YouTube API
         function onYouTubeIframeAPIReady() {
             player = new YT.Player('player', {
                 height: '1080', width: '1920', videoId: 'dQw4w9WgXcQ',
@@ -178,7 +194,6 @@
         tag.src = "https://www.youtube.com/iframe_api";
         document.head.appendChild(tag);
 
-        // 5. UI Controls
         function showTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
