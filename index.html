@@ -2,33 +2,37 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Canon Event - Producer v6</title>
+    <title>Canon Event - Producer v7</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        :root { --neon: #00ffcc; --bg: rgba(10, 10, 10, 0.95); }
+        :root { --neon: #00ffcc; --bg: rgba(10, 10, 10, 0.98); }
         body { margin: 0; background: #000; color: var(--neon); font-family: 'Segoe UI', sans-serif; overflow: hidden; }
-        #player { width: 100vw; height: 100vh; position: absolute; top:0; z-index: 1; pointer-events: none; }
         
+        /* The Video Container */
+        #player-container { width: 100vw; height: 100vh; position: absolute; top:0; z-index: 1; pointer-events: none; }
+        #player { width: 100%; height: 100%; }
+
+        /* The Control HUD */
         #ui { 
             position: absolute; top: 20px; left: 20px; z-index: 100; 
             background: var(--bg); padding: 20px; border: 2px solid var(--neon); 
-            border-radius: 12px; width: 340px; box-shadow: 0 0 15px rgba(0,255,204,0.3);
+            border-radius: 12px; width: 340px; box-shadow: 0 0 20px rgba(0,255,204,0.4);
             transition: opacity 0.3s;
         }
         .hidden { opacity: 0 !important; pointer-events: none !important; }
 
-        /* Tabs & Inputs */
         .tabs { display: flex; margin-bottom: 15px; border-bottom: 1px solid #333; }
         .tab { flex: 1; text-align: center; padding: 10px; cursor: pointer; font-size: 12px; opacity: 0.5; }
         .tab.active { opacity: 1; border-bottom: 2px solid var(--neon); font-weight: bold; }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
+
         .group { margin-bottom: 15px; border-bottom: 1px solid #222; padding-bottom: 10px; }
         label { display: block; font-size: 10px; text-transform: uppercase; margin-bottom: 5px; color: #888; }
         input { width: calc(100% - 20px); background: #1a1a1a; border: 1px solid #444; color: #fff; padding: 8px; border-radius: 4px; margin-bottom: 10px; }
         button { width: 100%; padding: 10px; cursor: pointer; border: none; font-weight: bold; border-radius: 4px; background: var(--neon); color: #000; margin-bottom: 5px; }
         
-        /* Playback Controls */
+        /* Transport Controls */
         .playback-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 10px; }
         .seek-container { display: flex; align-items: center; gap: 10px; }
         #seek-slider { flex: 1; cursor: pointer; accent-color: var(--neon); }
@@ -39,6 +43,8 @@
     </style>
 </head>
 <body>
+
+    <div id="player-container"><div id="player"></div></div>
 
     <div id="ui">
         <h2 style="margin:0 0 10px 0; text-align: center; letter-spacing: 2px;">CANON EVENT</h2>
@@ -65,38 +71,35 @@
 
             <div class="group">
                 <label>2. Song Setup</label>
-                <input type="text" id="video-id" placeholder="YouTube ID (e.g. dQw4w9WgXcQ)">
+                <input type="text" id="video-id" placeholder="YouTube Video ID">
                 <button onclick="syncVideo()">LOAD SONG</button>
             </div>
 
             <div class="group">
-                <label>3. Playback Control</label>
+                <label>3. Remote Transport</label>
                 <div class="playback-grid">
-                    <button onclick="sendControl('play')">PLAY</button>
-                    <button onclick="sendControl('pause')">PAUSE</button>
+                    <button onclick="sendControl('play')">▶ PLAY</button>
+                    <button onclick="sendControl('pause')">⏸ PAUSE</button>
                 </div>
                 <div class="seek-container">
-                    <span id="current-time" style="font-size:10px;">0:00</span>
-                    <input type="range" id="seek-slider" value="0" min="0" max="100" onchange="sendSeek(this.value)">
+                    <span id="current-time" style="font-size:10px; font-family: monospace;">0:00</span>
+                    <input type="range" id="seek-slider" value="0" min="0" max="100" oninput="sendSeek(this.value)">
                 </div>
             </div>
 
             <div class="group" style="border:none;">
                 <label>4. Active Singers</label>
-                <div id="producer-guest-list"><small style="opacity:0.3;">None linked.</small></div>
+                <div id="producer-guest-list"></div>
             </div>
         </div>
 
         <button onclick="toggleUI()" style="background: #333; color: #888; font-size: 10px; margin-top: 10px;">HIDE OVERLAY (Key: H)</button>
     </div>
 
-    <div id="player"></div>
-
     <script>
-        let player, peer;
-        let connections = {};
-        let micStream;
+        let player, peer, connections = {}, micStream;
 
+        // 1. PeerJS
         peer = new Peer();
         peer.on('open', id => document.getElementById('my-id').innerText = id);
         peer.on('connection', conn => handleConnection(conn));
@@ -110,46 +113,52 @@
             conn.on('open', () => {
                 connections[conn.peer] = { conn: conn, name: "Guest", muted: true };
                 conn.send({ type: 'name-update', name: document.getElementById('my-name').value || "Guest" });
+                
                 conn.on('data', data => {
                     if (data.type === 'name-update') { connections[conn.peer].name = data.name; updateProducerList(); }
                     if (data.type === 'load-vid') player.loadVideoById(data.id);
                     if (data.type === 'mic-cmd') applyMicHardware(data.enabled);
-                    if (data.type === 'ctrl') {
-                        if(data.action === 'play') player.playVideo();
-                        if(data.action === 'pause') player.pauseVideo();
-                    }
+                    if (data.type === 'ctrl') data.action === 'play' ? player.playVideo() : player.pauseVideo();
                     if (data.type === 'seek') player.seekTo(data.time, true);
                 });
                 updateProducerList();
             });
         }
 
-        function syncName() {
-            const name = document.getElementById('my-name').value;
-            Object.values(connections).forEach(c => c.conn.send({ type: 'name-update', name: name }));
-        }
-
-        function syncVideo() {
-            const vid = document.getElementById('video-id').value;
-            player.loadVideoById(vid);
-            Object.values(connections).forEach(c => c.conn.send({ type: 'load-vid', id: vid }));
-        }
-
-        // --- NEW PLAYBACK LOGIC ---
+        // 2. Playback Remote Control
         function sendControl(action) {
-            if(action === 'play') player.playVideo();
-            if(action === 'pause') player.pauseVideo();
+            action === 'play' ? player.playVideo() : player.pauseVideo();
             Object.values(connections).forEach(c => c.conn.send({ type: 'ctrl', action: action }));
         }
 
         function sendSeek(percent) {
-            const duration = player.getDuration();
-            const time = (percent / 100) * duration;
+            const time = (percent / 100) * player.getDuration();
             player.seekTo(time, true);
             Object.values(connections).forEach(c => c.conn.send({ type: 'seek', time: time }));
         }
 
-        // Update Slider as Video Plays
+        function syncVideo() {
+            const vid = document.getElementById('video-id').value.trim();
+            if (!vid) return;
+            player.loadVideoById(vid);
+            Object.values(connections).forEach(c => c.conn.send({ type: 'load-vid', id: vid }));
+        }
+
+        // 3. YouTube API & Availability Bypass
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('player', {
+                height: '1080', width: '1920', videoId: 'dQw4w9WgXcQ',
+                playerVars: { 
+                    'autoplay': 1, 'controls': 0, 'modestbranding': 1, 
+                    'rel': 0, 'enablejsapi': 1, 
+                    'origin': window.location.origin,
+                    'widget_referrer': window.location.href 
+                },
+                events: { 'onError': (e) => alert("Video blocked from embedding. Error Code: " + e.data) }
+            });
+        }
+
+        // Timer Loop
         setInterval(() => {
             if (player && player.getCurrentTime) {
                 const cur = player.getCurrentTime();
@@ -159,6 +168,7 @@
             }
         }, 1000);
 
+        // UI/Mic Helpers
         function updateProducerList() {
             const list = document.getElementById('producer-guest-list');
             list.innerHTML = "";
@@ -184,15 +194,10 @@
             micStream.getAudioTracks()[0].enabled = enabled;
         }
 
-        function onYouTubeIframeAPIReady() {
-            player = new YT.Player('player', {
-                height: '1080', width: '1920', videoId: 'dQw4w9WgXcQ',
-                playerVars: { 'autoplay': 1, 'controls': 0, 'origin': window.location.origin }
-            });
+        function syncName() {
+            const name = document.getElementById('my-name').value;
+            Object.values(connections).forEach(c => c.conn.send({ type: 'name-update', name: name }));
         }
-        var tag = document.createElement('script');
-        tag.src = "https://www.youtube.com/iframe_api";
-        document.head.appendChild(tag);
 
         function showTab(tabId) {
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -203,6 +208,7 @@
 
         function toggleUI() { document.getElementById('ui').classList.toggle('hidden'); }
         window.addEventListener('keydown', e => { if (e.key.toLowerCase() === 'h') toggleUI(); });
+        var tag = document.createElement('script'); tag.src = "https://www.youtube.com/iframe_api"; document.head.appendChild(tag);
     </script>
 </body>
 </html>
